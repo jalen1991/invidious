@@ -28,6 +28,15 @@ module Invidious::Videos::Parser
 
     ucid = channel_info.try { |ci| HelperExtractors.get_browse_id(ci) }
 
+    # Videos with multiple creators (collaborations) don't link the combined
+    # byline to a channel directly. Instead, their byline opens a
+    # "Collaborators" dialog where each entry carries one creator's channel
+    # browse endpoint. Fall back to the first creator so that the card still
+    # gets a channel link, while `author` keeps YouTube's combined label.
+    if ucid.try(&.empty?)
+      ucid = get_collaborator_ucid(channel_info)
+    end
+
     short_view_count = related.try do |r|
       HelperExtractors.get_short_view_count(r).to_s
     end
@@ -53,6 +62,30 @@ module Invidious::Videos::Parser
       "author_verified"  => JSON::Any.new(author_verified),
       "published"        => JSON::Any.new(published || ""),
     }
+  end
+
+  # Returns the channel id of the first creator listed in the
+  # "Collaborators" dialog that a multi-creator video's byline opens.
+  # Returns an empty string when the byline has no such dialog.
+  private def get_collaborator_ucid(channel_info : JSON::Any?) : String
+    list_items = channel_info.try &.dig?(
+      "navigationEndpoint", "showDialogCommand", "panelLoadingStrategy",
+      "inlineContent", "dialogViewModel", "customContent", "listViewModel",
+      "listItems"
+    ).try &.as_a?
+
+    return "" if list_items.nil?
+
+    list_items.each do |item|
+      ucid = item.dig?(
+        "listItemViewModel", "rendererContext", "commandContext", "onTap",
+        "innertubeCommand", "browseEndpoint", "browseId"
+      ).try &.as_s
+
+      return ucid if ucid && !ucid.empty?
+    end
+
+    return ""
   end
 
   def extract_video_info(video_id : String)
